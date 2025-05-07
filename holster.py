@@ -3,6 +3,33 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import json
 import os
+import signal
+from contextlib import contextmanager
+import time
+import re
+
+
+class ScanTimeoutError(Exception):
+    """Raised when scanning takes too long."""
+
+    pass
+
+
+@contextmanager
+def timeout(seconds):
+    def handler(signum, frame):
+        raise ScanTimeoutError(f"Scanning timed out after {seconds} seconds")
+
+    # Set the signal handler and a timer
+    original_handler = signal.signal(signal.SIGALRM, handler)
+    signal.alarm(seconds)
+
+    try:
+        yield
+    finally:
+        # Restore the original handler and cancel the timer
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, original_handler)
 
 
 class Holster:
@@ -87,42 +114,173 @@ class Holster:
 
         self._write_config(config)
 
-    def scan_mcp_servers(self, directory: Path) -> Set[Path]:
-        """Scan a directory for MCP servers.
+    def list_potential_servers(self) -> Dict[str, Any]:
+        """List potential MCP server directories without scanning their contents.
 
-        This method scans the given directory and its subdirectories (up to 2 levels deep)
-        for potential MCP servers. A directory is considered a server if it contains:
-        - A Python file with MCP indicators (FastMCP import or @mcp.tool decorator)
-        - A requirements.txt or pyproject.toml file (optional if MCP code is found)
-
-        Args:
-            directory: Root directory to scan for MCP servers
+        This method quickly lists directories that might contain MCP servers by looking
+        for common project structures and Python files, without reading their contents.
+        It checks common project locations where users typically keep their servers.
 
         Returns:
-            Set of Path objects pointing to valid MCP server directories
-
-        Raises:
-            ValueError: If the directory does not exist
+            Dict containing:
+                - locations: Dict mapping location name to its results
+                    Each result contains:
+                    - directories: List of potential server directories
+                    - count: Number of directories found
+                    - path: Full path that was scanned
+                    - exists: Whether the directory exists
+                - directories: Dict mapping directory name to its full path
+                    This is a flat list of all potential server directories found
+                - summary: Overall statistics
+                    - total_directories_found: Total number of potential directories
+                    - locations_checked: Number of locations checked
+                    - locations_exist: Number of locations that exist
         """
-        if not directory.exists():
-            raise ValueError(f"Directory does not exist: {directory}")
+        # Get home directory
+        home = Path.home()
 
-        server_dirs: Set[Path] = set()
+        # Define common project locations to check
+        locations = {
+            "documents": home / "Documents",
+            "projects": home / "Projects",
+            "dev": home / "dev",
+            "workspace": home / "workspace",
+            "current": Path.cwd(),
+            "parent": Path.cwd().parent,
+        }
+
+        # Add any immediate subdirectories in home that might contain projects
+        for item in home.iterdir():
+            if item.is_dir() and not item.name.startswith(
+                "."
+            ):  # Skip hidden directories
+                locations[f"home-{item.name}"] = item
+
+        results: Dict[str, Any] = {"locations": {}, "directories": {}}
+        total_dirs = 0
+        locations_exist = 0
+
+        # Helper function to check if a directory looks like a potential server
+        def is_potential_server(dir_path: Path) -> bool:
+            # Check for common server indicators
+            has_py_files = any(dir_path.glob("*.py"))
+            has_requirements = (dir_path / "requirements.txt").exists()
+            has_pyproject = (dir_path / "pyproject.toml").exists()
+            has_src = (dir_path / "src").exists()
+
+            return has_py_files or has_requirements or has_pyproject or has_src
+
+        # Scan each location
+        for name, path in locations.items():
+            if path.exists():
+                locations_exist += 1
+                potential_dirs: Set[Path] = set()
+
+                try:
+                    # Scan Level 1 (immediate subdirectories)
+                    for item in path.iterdir():
+                        if not item.is_dir():
+                            continue
+
+                        if is_potential_server(item):
+                            potential_dirs.add(item)
+                            # Add to flat directory list with a unique key
+                            dir_key = f"{name}-{item.name}"
+                            results["directories"][dir_key] = str(item)
+                            continue
+
+                        # Scan Level 2 (subdirectories)
+                        try:
+                            for subitem in item.iterdir():
+                                if not subitem.is_dir():
+                                    continue
+
+                                if is_potential_server(subitem):
+                                    potential_dirs.add(subitem)
+                                    # Add to flat directory list with a unique key
+                                    dir_key = f"{name}-{item.name}-{subitem.name}"
+                                    results["directories"][dir_key] = str(subitem)
+                                    continue
+
+                                # Scan subdirectories of Level 2
+                                try:
+                                    for subsubitem in subitem.iterdir():
+                                        if subsubitem.is_dir() and is_potential_server(
+                                            subsubitem
+                                        ):
+                                            potential_dirs.add(subsubitem)
+                                            # Add to flat directory list with a unique key
+                                            dir_key = f"{name}-{item.name}-{subitem.name}-{subsubitem.name}"
+                                            results["directories"][dir_key] = str(
+                                                subsubitem
+                                            )
+                                except PermissionError:
+                                    pass
+                        except PermissionError:
+                            pass
+
+                    dir_count = len(potential_dirs)
+                    total_dirs += dir_count
+                    results["locations"][name] = {
+                        "directories": [str(d) for d in potential_dirs],
+                        "count": dir_count,
+                        "path": str(path),
+                        "exists": True,
+                    }
+                except Exception as e:
+                    results["locations"][name] = {
+                        "directories": [],
+                        "count": 0,
+                        "path": str(path),
+                        "exists": True,
+                        "error": str(e),
+                    }
+            else:
+                results["locations"][name] = {
+                    "directories": [],
+                    "count": 0,
+                    "path": str(path),
+                    "exists": False,
+                }
+
+        # Add summary statistics
+        results["summary"] = {
+            "total_directories_found": total_dirs,
+            "locations_checked": len(locations),
+            "locations_exist": locations_exist,
+        }
+
+        return results
+
+    def scan_specific_directories(self, directories: List[Path]) -> Dict[str, Any]:
+        """Scan specific directories for MCP servers.
+
+        This method scans only the provided directories for MCP servers, checking their
+        contents for MCP indicators and README files for configuration instructions.
+
+        Args:
+            directories: List of directories to scan
+
+        Returns:
+            Dict containing:
+                - servers: Dict mapping server name to its configuration
+                    Each server config contains:
+                    - path: Full path to the server directory
+                    - name: Suggested server name
+                    - command: Command to run (e.g. 'uvx')
+                    - args: List of command arguments
+                    - instructions: Instructions from README if found
+                - count: Number of servers found
+        """
+        server_configs: Dict[str, Dict[str, Any]] = {}
 
         # Helper function to check if a directory is a valid MCP server
         def is_mcp_server(dir_path: Path) -> bool:
-            # Check for Python files with MCP indicators (including in src/ and package directories)
+            # Check for Python files with MCP indicators
             for py_file in dir_path.glob("**/*.py"):
                 try:
                     content = py_file.read_text()
                     if "FastMCP" in content or "@mcp.tool()" in content:
-                        # If we find MCP code in a nested directory, return the root project directory
-                        if "src" in py_file.parts:
-                            return True
-                        if (
-                            len(py_file.parts) > len(dir_path.parts) + 2
-                        ):  # More than 2 levels deep
-                            return True
                         return True
                 except Exception:
                     continue
@@ -157,39 +315,83 @@ class Holster:
                 return Path(*path.parts[:src_index])
             return path
 
-        # Scan Level 1 (immediate subdirectories)
-        try:
-            for item in directory.iterdir():
-                if not item.is_dir():
-                    continue
+        # Helper function to extract server config from README
+        def extract_server_config(dir_path: Path) -> Dict[str, Any]:
+            config = {
+                "path": str(dir_path),
+                "name": dir_path.name,
+                "command": "uv",  # Default command
+                "args": [],  # Default args
+                "instructions": None,
+            }
 
-                if is_mcp_server(item):
-                    server_dirs.add(get_project_root(item))
-                    continue  # Skip deeper scanning if we found a server
+            # Check for README files
+            readme_files = list(dir_path.glob("README*"))
+            if not readme_files:
+                print(f"No README files found in {dir_path}")
+                return config
 
-                # Scan Level 2 (subdirectories)
-                try:
-                    for subitem in item.iterdir():
-                        if not subitem.is_dir():
-                            continue
+            # Read the first README file found
+            try:
+                content = readme_files[0].read_text()
+                print(f"Found README: {readme_files[0]}")
+                print(f"Content length: {len(content)}")
 
-                        if is_mcp_server(subitem):
-                            server_dirs.add(get_project_root(subitem))
-                            continue  # Skip deeper scanning if we found a server
+                # Look for JSON configuration
+                import json
 
-                        # Scan subdirectories of Level 2
-                        try:
-                            for subsubitem in subitem.iterdir():
-                                if subsubitem.is_dir() and is_mcp_server(subsubitem):
-                                    server_dirs.add(get_project_root(subsubitem))
-                        except PermissionError:
-                            pass
-                except PermissionError:
-                    pass
-        except PermissionError:
-            pass
+                # Find JSON blocks in the README
+                json_blocks = re.finditer(
+                    r"```(?:json)?\s*(?:{)?\s*\"mcpServers\":\s*({[\s\S]*?})\s*(?:})?```",
+                    content,
+                )
+                blocks_found = 0
+                for match in json_blocks:
+                    blocks_found += 1
+                    try:
+                        json_str = '{"mcpServers": ' + match.group(1) + "}"
+                        print(f"Found JSON block {blocks_found}:")
+                        print(json_str)
+                        json_config = json.loads(json_str)
 
-        return server_dirs
+                        # Check if this is an MCP server configuration
+                        if "mcpServers" in json_config:
+                            server_config = json_config["mcpServers"]
+                            if isinstance(server_config, dict):
+                                # Use the first server config found
+                                for name, server in server_config.items():
+                                    if isinstance(server, dict):
+                                        print(f"Found server config for {name}:")
+                                        print(server)
+                                        config.update(
+                                            {
+                                                "name": name,
+                                                "command": server.get("command", "uv"),
+                                                "args": server.get("args", []),
+                                                "instructions": content,
+                                            }
+                                        )
+                                        return config
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error: {e}")
+                        continue
+                    except Exception as e:
+                        print(f"Other error: {e}")
+                        continue
+
+                print(f"No valid JSON blocks found in {blocks_found} blocks")
+            except Exception as e:
+                print(f"Error reading README: {e}")
+
+            return config
+
+        for directory in directories:
+            if directory.exists() and is_mcp_server(directory):
+                root_dir = get_project_root(directory)
+                server_config = extract_server_config(root_dir)
+                server_configs[server_config["name"]] = server_config
+
+        return {"servers": server_configs, "count": len(server_configs)}
 
 
 # Initialize FastMCP server
@@ -237,7 +439,7 @@ async def explain_holster() -> Dict[str, Any]:
         - unusedMcpServers: Servers that are stored but not active
 
         It also provides functionality to scan directories for MCP servers, identifying
-        them based on their code structure and dependencies.
+        them based on their code structure, dependencies, and README configuration.
         """,
         "config_management": """
         Holster manages Claude's configuration file at:
@@ -257,13 +459,12 @@ async def explain_holster() -> Dict[str, Any]:
         3. list_servers: View all active and inactive servers
         4. update_server_status: Activate or deactivate servers in Claude Desktop
         5. delete_servers: Remove servers from the configuration
-        6. scan_servers: Discover MCP servers in a specific directory (up to 2 levels deep)
-        7. discover_mcp_servers: Automatically scan common project directories for MCP servers
+        6. list_potential_servers: Quick directory listing without scanning contents
+        7. scan_specific_directories: Detailed scan of selected directories
         8. explain_holster: This tool, explaining how Holster works
 
         Server Discovery:
-        - scan_servers: Scans a specific directory for MCP servers
-        - discover_mcp_servers: Automatically scans common project locations:
+        - list_potential_servers: Quickly lists directories that might contain servers by checking:
           * ~/Documents/
           * ~/Projects/
           * ~/dev/
@@ -271,10 +472,10 @@ async def explain_holster() -> Dict[str, Any]:
           * Current directory and its parent
           * Any immediate subdirectories in home (excluding hidden directories)
 
-        Both tools identify MCP servers by looking for:
-        - Python files containing FastMCP imports and @mcp.tool decorators
-        - Associated requirements.txt or pyproject.toml files
-        - Proper directory structure up to 2 levels deep
+        - scan_specific_directories: Detailed scan of selected directories, checking for:
+          * Python files containing FastMCP imports and @mcp.tool decorators
+          * Associated requirements.txt or pyproject.toml files
+          * README files with server configuration in JSON format
         """,
         "best_practices": """
         Recommended usage patterns:
@@ -282,9 +483,17 @@ async def explain_holster() -> Dict[str, Any]:
         2. Use list_servers to verify current state
         3. Keep server names unique and descriptive
         4. Use update_server_status to activate/deactivate servers instead of deleting/recreating
-        5. Use discover_mcp_servers to find MCP servers in common project locations
-        6. Use scan_servers for targeted directory scanning
-        7. Verify discovered servers before adding them to configuration
+        5. Use list_potential_servers for quick directory listing
+        6. Use scan_specific_directories for detailed scanning of selected directories
+        7. Add server configuration to README files in JSON format:
+           ```json
+           "mcpServers": {
+             "server-name": {
+               "command": "uvx",
+               "args": ["server-package"]
+             }
+           }
+           ```
         8. Maintain proper requirements files for all MCP servers
         """,
     }
@@ -403,120 +612,63 @@ async def delete_servers(server_names: List[str]) -> Dict[str, Any]:
 
 
 @mcp.tool()
-async def scan_servers(directory: str) -> Dict[str, Any]:
-    """Scan a directory for MCP servers and return their locations.
+async def list_potential_servers() -> Dict[str, Any]:
+    """List potential MCP server directories without scanning their contents.
 
-    This tool scans the specified directory and its subdirectories (up to 2 levels deep)
-    for potential MCP servers. It identifies directories containing MCP server code
-    and returns their locations.
-
-    Args:
-        directory: Path to the directory to scan
-
-    Returns:
-        Dict containing:
-            - servers: List of server directory paths
-            - count: Number of servers found
-            - scanned_directory: The directory that was scanned
-
-    Raises:
-        ValueError: If the directory does not exist
-    """
-    dir_path = Path(directory)
-    server_dirs = holster.scan_mcp_servers(dir_path)
-
-    return {
-        "servers": [str(path) for path in server_dirs],
-        "count": len(server_dirs),
-        "scanned_directory": str(dir_path),
-    }
-
-
-@mcp.tool()
-async def discover_mcp_servers() -> Dict[str, Any]:
-    """Discover MCP servers in common project locations.
-
-    This tool scans common project directories where MCP servers might be stored:
-    1. ~/Documents/
-    2. ~/Projects/
-    3. ~/dev/
-    4. ~/workspace/
-    5. Current directory and its parent
-    6. Any immediate subdirectories in home that might contain projects
+    This tool quickly lists directories that might contain MCP servers by looking
+    for common project structures and Python files, without reading their contents.
+    It automatically checks common project locations where users typically keep
+    their servers:
+    - ~/Documents/
+    - ~/Projects/
+    - ~/dev/
+    - ~/workspace/
+    - Current directory and its parent
+    - Any immediate subdirectories in home that might contain projects
 
     Returns:
         Dict containing:
-            - locations: Dict mapping location name to its scan results
-                Each scan result contains:
-                - servers: List of server directory paths
-                - count: Number of servers found
+            - locations: Dict mapping location name to its results
+                Each result contains:
+                - directories: List of potential server directory paths
+                - count: Number of directories found
                 - path: Full path that was scanned
                 - exists: Whether the directory exists
+            - directories: Dict mapping directory name to its full path
+                This is a flat list of all potential server directories found
             - summary: Overall statistics
-                - total_servers_found: Total number of potential servers
+                - total_directories_found: Total number of potential directories
                 - locations_checked: Number of locations checked
                 - locations_exist: Number of locations that exist
     """
-    # Get home directory
-    home = Path.home()
+    return holster.list_potential_servers()
 
-    # Define common project locations to check
-    locations = {
-        "documents": home / "Documents",
-        "projects": home / "Projects",
-        "dev": home / "dev",
-        "workspace": home / "workspace",
-        "current": Path.cwd(),
-        "parent": Path.cwd().parent,
-    }
 
-    # Add any immediate subdirectories in home that might contain projects
-    for item in home.iterdir():
-        if item.is_dir() and not item.name.startswith("."):  # Skip hidden directories
-            locations[f"home-{item.name}"] = item
+@mcp.tool()
+async def scan_specific_directories(directories: List[str]) -> Dict[str, Any]:
+    """Scan specific directories for MCP servers.
 
-    # Scan each location
-    results: Dict[str, Any] = {"locations": {}}
-    total_servers = 0
-    locations_exist = 0
+    This tool scans only the provided directories for MCP servers, checking their
+    contents for MCP indicators and README files for configuration instructions.
+    Use this after list_potential_servers to scan only the directories you're
+    interested in.
 
-    for name, path in locations.items():
-        if path.exists():
-            locations_exist += 1
-            try:
-                server_dirs = holster.scan_mcp_servers(path)
-                server_count = len(server_dirs)
-                total_servers += server_count
-                results["locations"][name] = {
-                    "servers": [str(server_dir) for server_dir in server_dirs],
-                    "count": server_count,
-                    "path": str(path),
-                    "exists": True,
-                }
-            except Exception as e:
-                results["locations"][name] = {
-                    "servers": [],
-                    "count": 0,
-                    "path": str(path),
-                    "exists": True,
-                    "error": str(e),
-                }
-        else:
-            results["locations"][name] = {
-                "servers": [],
-                "count": 0,
-                "path": str(path),
-                "exists": False,
-            }
+    Args:
+        directories: List of directory paths to scan
 
-    # Add summary statistics
-    results["summary"] = {
-        "total_servers_found": total_servers,
-        "locations_checked": len(locations),
-        "locations_exist": locations_exist,
-    }
-
-    return results
+    Returns:
+        Dict containing:
+            - servers: Dict mapping server name to its configuration
+                Each server config contains:
+                - path: Full path to the server directory
+                - name: Suggested server name
+                - command: Command to run (e.g. 'uvx')
+                - args: List of command arguments
+                - instructions: Instructions from README if found
+            - count: Number of servers found
+    """
+    dir_paths = [Path(d) for d in directories]
+    return holster.scan_specific_directories(dir_paths)
 
 
 if __name__ == "__main__":
