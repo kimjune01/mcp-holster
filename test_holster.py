@@ -142,3 +142,57 @@ class TestHolster:
 
         with pytest.raises(ValueError):
             holster.create_server(new_server)
+
+    def test_round_trip(self, holster: Holster, test_config_path: Path):
+        """Test a complete round trip of CRUD operations."""
+        # Initial read
+        active, inactive = holster.read_servers()
+        assert len(active) == 2
+        assert len(inactive) == 1
+        assert "server1" in active
+        assert "server2" in active
+        assert "server3" in inactive
+
+        # Create new server
+        new_server = {
+            "name": "round_trip_server",
+            "command": "uv",
+            "args": ["--directory", "/path/to/round_trip", "run", "round_trip.py"],
+        }
+        holster.create_server(new_server)
+
+        # Read after create
+        active, inactive = holster.read_servers()
+        assert len(active) == 3
+        assert len(inactive) == 1
+        assert "round_trip_server" in active
+        assert active["round_trip_server"]["command"] == "uv"
+
+        # Update status (move to inactive)
+        holster.update_server_status(["round_trip_server"], active=False)
+
+        # Read after update
+        active, inactive = holster.read_servers()
+        assert len(active) == 2
+        assert len(inactive) == 2
+        assert "round_trip_server" not in active
+        assert "round_trip_server" in inactive
+        assert inactive["round_trip_server"]["command"] == "uv"
+
+        # Delete server
+        holster.delete_servers(["round_trip_server"])
+
+        # Final read
+        active, inactive = holster.read_servers()
+        assert len(active) == 2
+        assert len(inactive) == 1
+        assert "round_trip_server" not in active
+        assert "round_trip_server" not in inactive
+
+        # Verify config file state
+        with open(test_config_path) as f:
+            config = json.load(f)
+            assert "round_trip_server" not in config["mcpServers"]
+            assert "round_trip_server" not in config["unusedMcpServers"]
+            assert len(config["mcpServers"]) == 2
+            assert len(config["unusedMcpServers"]) == 1

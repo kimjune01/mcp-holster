@@ -1,41 +1,146 @@
 # Holster
 
-This server makes swapping in and out of MCP servers with Claude config happen from inside Claude desktop instead of opening a text editor.
+A Python-based tool for managing MCP servers in Claude's configuration file directly from Claude desktop, eliminating the need for manual text editor modifications.
 
-The default location for the config file is located in
+## Features
+
+- 🔄 Seamless server management within Claude desktop
+- 📝 JSON configuration handling with proper parsing and encoding
+- 📋 Separate tracking of active and inactive servers
+- 🛠️ Simple command-line interface
+- ✅ Comprehensive test coverage
+
+## Installation
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/yourusername/holster.git
+cd holster
+```
+
+2. Create and activate a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+```
+
+3. Install dependencies using `uv`:
+
+```bash
+uv pip install -r requirements.txt
+```
+
+## Configuration
+
+The default configuration file location is:
 
 ```
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
+## Usage
+
+### Understanding Holster
+
+First, you can get a comprehensive explanation of how Holster works:
+
+```python
+# Get detailed explanation of Holster's functionality
+explanation = await explain_holster()
+print(explanation["overview"])
+print(explanation["tools"])
+```
+
+### Creating a New Server
+
+```python
+# Create a new server configuration
+server_config = await create_server(
+    name="my_server",
+    command="uv",
+    directory="/path/to/server",
+    script="server.py"
+)
+```
+
+### Reading Server Status
+
+```python
+# Get lists of active and inactive servers
+servers = await list_servers()
+print("Active servers:", list(servers["active"].keys()))
+print("Inactive servers:", list(servers["inactive"].keys()))
+```
+
+### Updating Server Status
+
+```python
+# Move servers to inactive
+result = await update_server_status(
+    server_names=["server1", "server2"],
+    active=False
+)
+print(f"Moved {len(result['updated'])} servers to inactive")
+
+# Move servers back to active
+result = await update_server_status(
+    server_names=["server1", "server2"],
+    active=True
+)
+print(f"Moved {len(result['updated'])} servers to active")
+```
+
+### Deleting Servers
+
+```python
+# Delete servers from both active and inactive lists
+result = await delete_servers(["server1", "server2"])
+print(f"Deleted {len(result['deleted'])} servers")
+print(f"Remaining active: {result['remaining_active']}")
+print(f"Remaining inactive: {result['remaining_inactive']}")
+```
+
+### Health Check
+
+```python
+# Check if Holster server is running
+response = await ping()
+print(response)  # Should print "Pong!"
+```
+
+## Development
+
+### Running Tests
+
+```bash
+python -m pytest test_holster.py -v
+```
+
 ## Motivation
 
-Dealing with text editors for manually modifying a JSON file is a job perfect for LLMs, but Claude only gives a pointer to the config file and wishes us luck. Can we do better?
+Managing MCP servers through text editors is a task well-suited for LLMs, but Claude currently only provides a pointer to the config file. Holster aims to improve this experience by providing a seamless interface for server management directly within Claude desktop.
 
 ## Scope
 
-The most common way I find servers is through Github, and I download them manually. For now, downloading or looking for servers out on the web is out of scope.
+### In Scope
 
-Keeping track of workspaces defined a collection of servers would be a nice to have, but out of scope for now.
+- Server configuration management within Claude's config file
+- Tracking of active and inactive servers
+- Basic CRUD operations for server configurations
 
-### Create
+### Out of Scope
 
-Given that I have mcp servers in a directory somewhere, in my case, I clone them into `~/Documents` or make new ones of my own in there. Holster should be able to look at it and make up a server config and insert it into Claude's config file.
+- Automatic server discovery and downloading
+- Web-based server search
+- Workspace management
+- Server versioning
 
-### Read
+## License
 
-Given that I have one or many mcp servers, the client should be able to query for all the mcp servers. In order to keep things simple, the config file for Claude should be the only source of truth. Servers not being used shouldn't be recognized by Claude, but be recognized by Holster.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-The read tool call should display two lists of tools by name, used and unused.
+## Author
 
-### Update
-
-Although the easiest thing to do would be to comment out the unused servers, JSON does not support comments. It should be moved to a different array that is not recognized by Claude. The alternative key to `mcpServers` is `unusedMcpServers`.
-
-In order to mark a server to not be used, it should be moved from one array to another. The parameters to this tool call should be an array of server names, as specified from Read.
-
-To make the operation deterministic, the tool call should involve parsing and encoding JSON.
-
-### Delete
-
-Deleting an object from inside the JSON array should also involve parsing and encoding JSON, taking in an array of server names.
+June Kim & LLM tools
