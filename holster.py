@@ -216,10 +216,21 @@ async def explain_holster() -> Dict[str, Any]:
         3. list_servers: View all active and inactive servers
         4. update_server_status: Activate or deactivate servers in Claude Desktop
         5. delete_servers: Remove servers from the configuration
-        6. scan_servers: Discover MCP servers in directories (up to 2 levels deep)
-        7. explain_holster: This tool, explaining how Holster works
+        6. scan_servers: Discover MCP servers in a specific directory (up to 2 levels deep)
+        7. discover_mcp_servers: Automatically scan common project directories for MCP servers
+        8. explain_holster: This tool, explaining how Holster works
 
-        The scan_servers tool can identify MCP servers by looking for:
+        Server Discovery:
+        - scan_servers: Scans a specific directory for MCP servers
+        - discover_mcp_servers: Automatically scans common project locations:
+          * ~/Documents/
+          * ~/Projects/
+          * ~/dev/
+          * ~/workspace/
+          * Current directory and its parent
+          * Any immediate subdirectories in home (excluding hidden directories)
+
+        Both tools identify MCP servers by looking for:
         - Python files containing FastMCP imports and @mcp.tool decorators
         - Associated requirements.txt or pyproject.toml files
         - Proper directory structure up to 2 levels deep
@@ -230,9 +241,10 @@ async def explain_holster() -> Dict[str, Any]:
         2. Use list_servers to verify current state
         3. Keep server names unique and descriptive
         4. Use update_server_status to activate/deactivate servers instead of deleting/recreating
-        5. Use scan_servers to discover MCP servers in project directories
-        6. Verify scanned servers before adding them to configuration
-        7. Maintain proper requirements files for all MCP servers
+        5. Use discover_mcp_servers to find MCP servers in common project locations
+        6. Use scan_servers for targeted directory scanning
+        7. Verify discovered servers before adding them to configuration
+        8. Maintain proper requirements files for all MCP servers
         """,
     }
 

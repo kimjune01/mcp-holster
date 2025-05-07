@@ -54,6 +54,8 @@ Add this to your growing list of MCP servers:
     }
 ```
 
+Restart Claude to reload the config.
+
 ## Usage
 
 ### Understanding Holster
