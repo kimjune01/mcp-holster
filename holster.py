@@ -1,8 +1,6 @@
 from typing import Any, Dict, List, Tuple
 from pathlib import Path
-import httpx
 from mcp.server.fastmcp import FastMCP
-import uvicorn
 import json
 import os
 
@@ -149,7 +147,7 @@ async def explain_holster() -> Dict[str, Any]:
         1. ping: Health check for the Holster server
         2. create_server: Add new servers to the active list
         3. list_servers: View all active and inactive servers
-        4. update_server_status: Move servers between active/inactive lists
+        4. update_server_status: Activate or deactivate servers in Claude Desktop
         5. delete_servers: Remove servers from the configuration
         6. explain_holster: This tool, explaining how Holster works
         """,
@@ -158,7 +156,7 @@ async def explain_holster() -> Dict[str, Any]:
         1. Always check server existence before operations
         2. Use list_servers to verify current state
         3. Keep server names unique and descriptive
-        4. Use update_server_status instead of deleting/recreating
+        4. Use update_server_status to activate/deactivate servers instead of deleting/recreating
         5. Verify changes with list_servers after operations
         """,
     }
@@ -223,16 +221,16 @@ async def list_servers() -> Dict[str, Dict[str, Any]]:
 async def update_server_status(server_names: List[str], active: bool) -> Dict[str, Any]:
     """Update the status of servers in Holster's configuration.
 
-    This tool moves servers between Holster's active and inactive lists, effectively
-    enabling or disabling them in Claude Desktop.
+    This tool activates or deactivates servers in Claude Desktop by moving them between
+    Holster's active and inactive lists.
 
     Args:
         server_names: List of server names to update in Holster
-        active: True to enable servers in Claude Desktop, False to disable them
+        active: True to activate servers in Claude Desktop, False to deactivate them
 
     Returns:
         Dict containing:
-            - updated: List of server names that were moved
+            - updated: List of server names that were activated/deactivated
             - active_count: Number of servers now active
             - inactive_count: Number of servers now inactive
 

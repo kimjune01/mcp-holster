@@ -77,19 +77,19 @@ print("Inactive servers:", list(servers["inactive"].keys()))
 ### Updating Server Status
 
 ```python
-# Move servers to inactive
+# Deactivate servers
 result = await update_server_status(
     server_names=["server1", "server2"],
     active=False
 )
-print(f"Moved {len(result['updated'])} servers to inactive")
+print(f"Deactivated {len(result['updated'])} servers")
 
-# Move servers back to active
+# Activate servers
 result = await update_server_status(
     server_names=["server1", "server2"],
     active=True
 )
-print(f"Moved {len(result['updated'])} servers to active")
+print(f"Activated {len(result['updated'])} servers")
 ```
 
 ### Deleting Servers
