@@ -40,6 +40,20 @@ The default configuration file location is:
 ~/Library/Application Support/Claude/claude_desktop_config.json
 ```
 
+Add this to your growing list of MCP servers:
+
+```
+    "holster": {
+        "command": "uv",
+        "args": [
+            "--directory",
+            "<THIS_DIRECTORY>",
+            "run",
+            "holster.py"
+        ]
+    }
+```
+
 ## Usage
 
 ### Understanding Holster
