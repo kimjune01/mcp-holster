@@ -1,14 +1,32 @@
 {
-    "mcpServers": {
-      "holster": {
+  "mcpServers": {
+    "weather": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/Users/junekim/Documents/weather",
+        "run",
+        "weather.py"
+      ]
+    },
+    "holster": {
         "command": "uv",
         "args": [
-          "--directory",
-          "/Users/junekim/Documents/holster",
-          "run",
-          "holster.py"
+            "--directory",
+            "/Users/junekim/Documents/holster",
+            "run",
+            "holster.py"
         ]
-      }
     }
+  },
+  "unusedMcpServers": {
+      "synth": {
+          "command": "sh",
+          "args": [
+              "-c",
+              "DYLD_LIBRARY_PATH=/opt/homebrew/lib uv --directory /Users/junekim/Documents/synth run server.py"
+          ]
+      }
+      
   }
-  
+}

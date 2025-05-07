@@ -1,0 +1,144 @@
+import json
+import os
+import pytest
+from pathlib import Path
+from typing import Dict, List
+from unittest.mock import patch, mock_open
+
+from holster import Holster
+
+
+@pytest.fixture
+def test_config_path(tmp_path: Path) -> Path:
+    """Create a temporary config file for testing."""
+    return tmp_path / "test_config.json"
+
+
+@pytest.fixture
+def sample_config() -> Dict:
+    """Sample config data for testing."""
+    return {
+        "mcpServers": {
+            "server1": {
+                "command": "uv",
+                "args": ["--directory", "/path/to/server1", "run", "server1.py"],
+            },
+            "server2": {
+                "command": "uv",
+                "args": ["--directory", "/path/to/server2", "run", "server2.py"],
+            },
+        },
+        "unusedMcpServers": {
+            "server3": {
+                "command": "uv",
+                "args": ["--directory", "/path/to/server3", "run", "server3.py"],
+            }
+        },
+    }
+
+
+@pytest.fixture
+def holster(test_config_path: Path, sample_config: Dict) -> Holster:
+    """Create a Holster instance with test config."""
+    # Write sample config to test file
+    with open(test_config_path, "w") as f:
+        json.dump(sample_config, f, indent=2)
+
+    return Holster(config_path=test_config_path)
+
+
+class TestHolster:
+    def test_create_server(self, holster: Holster, test_config_path: Path):
+        """Test creating a new server configuration."""
+        new_server = {
+            "name": "new_server",
+            "command": "uv",
+            "args": ["--directory", "/path/to/new_server", "run", "new_server.py"],
+        }
+
+        # Test creating a new server
+        holster.create_server(new_server)
+
+        # Verify the server was added to mcpServers
+        with open(test_config_path) as f:
+            config = json.load(f)
+            assert "new_server" in config["mcpServers"]
+            assert config["mcpServers"]["new_server"] == {
+                "command": new_server["command"],
+                "args": new_server["args"],
+            }
+            assert len(config["mcpServers"]) == 3  # Original 2 + new 1
+
+    def test_read_servers(self, holster: Holster):
+        """Test reading active and inactive servers."""
+        active, inactive = holster.read_servers()
+
+        # Verify correct number of servers in each list
+        assert len(active) == 2
+        assert len(inactive) == 1
+
+        # Verify server names and structure
+        assert "server1" in active
+        assert "server2" in active
+        assert "server3" in inactive
+
+        # Verify server configurations
+        assert active["server1"]["command"] == "uv"
+        assert active["server2"]["command"] == "uv"
+        assert inactive["server3"]["command"] == "uv"
+
+    def test_update_server_status(self, holster: Holster, test_config_path: Path):
+        """Test moving servers between active and inactive lists."""
+        # Test moving server1 to inactive
+        holster.update_server_status(["server1"], active=False)
+
+        # Verify the move
+        with open(test_config_path) as f:
+            config = json.load(f)
+            assert "server1" not in config["mcpServers"]
+            assert "server1" in config["unusedMcpServers"]
+            assert len(config["mcpServers"]) == 1
+            assert len(config["unusedMcpServers"]) == 2
+
+        # Test moving server1 back to active
+        holster.update_server_status(["server1"], active=True)
+
+        # Verify the move back
+        with open(test_config_path) as f:
+            config = json.load(f)
+            assert "server1" in config["mcpServers"]
+            assert "server1" not in config["unusedMcpServers"]
+            assert len(config["mcpServers"]) == 2
+            assert len(config["unusedMcpServers"]) == 1
+
+    def test_delete_servers(self, holster: Holster, test_config_path: Path):
+        """Test deleting servers from both active and inactive lists."""
+        # Test deleting server1 from active and server3 from inactive
+        holster.delete_servers(["server1", "server3"])
+
+        # Verify the deletions
+        with open(test_config_path) as f:
+            config = json.load(f)
+            assert "server1" not in config["mcpServers"]
+            assert "server3" not in config["unusedMcpServers"]
+            assert len(config["mcpServers"]) == 1
+            assert len(config["unusedMcpServers"]) == 0
+
+    def test_invalid_server_name(self, holster: Holster):
+        """Test handling of invalid server names."""
+        with pytest.raises(ValueError):
+            holster.update_server_status(["nonexistent_server"], active=False)
+
+        with pytest.raises(ValueError):
+            holster.delete_servers(["nonexistent_server"])
+
+    def test_duplicate_server_name(self, holster: Holster):
+        """Test handling of duplicate server names."""
+        new_server = {
+            "name": "server1",  # Already exists
+            "command": "uv",
+            "args": ["--directory", "/path/to/duplicate", "run", "duplicate.py"],
+        }
+
+        with pytest.raises(ValueError):
+            holster.create_server(new_server)
