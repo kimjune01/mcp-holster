@@ -47,6 +47,68 @@ def holster(test_config_path: Path, sample_config: Dict) -> Holster:
     return Holster(config_path=test_config_path)
 
 
+@pytest.fixture
+def mock_server_directories(tmp_path: Path) -> Dict[str, Path]:
+    """Create a mock directory structure with MCP servers."""
+    # Create root directories
+    mcp_servers = tmp_path / "mcp-servers"
+    my_projects = tmp_path / "my-projects"
+    mcp_servers.mkdir()
+    my_projects.mkdir()
+
+    # Create server1 (Level 1)
+    server1 = mcp_servers / "server1"
+    server1.mkdir()
+    (server1 / "server1.py").write_text(
+        "from mcp.server.fastmcp import FastMCP\n@mcp.tool()\ndef tool(): pass"
+    )
+    (server1 / "requirements.txt").write_text("mcp[cli]>=1.7.1")
+
+    # Create server2 (Level 1)
+    server2 = mcp_servers / "server2"
+    server2.mkdir()
+    (server2 / "server2.py").write_text(
+        "from mcp.server.fastmcp import FastMCP\n@mcp.tool()\ndef tool(): pass"
+    )
+    (server2 / "requirements.txt").write_text("mcp[cli]>=1.7.1")
+
+    # Create project1/mcp-server (Level 2)
+    project1 = my_projects / "project1"
+    project1.mkdir()
+    mcp_server = project1 / "mcp-server"
+    mcp_server.mkdir()
+    (mcp_server / "server.py").write_text(
+        "from mcp.server.fastmcp import FastMCP\n@mcp.tool()\ndef tool(): pass"
+    )
+    (mcp_server / "requirements.txt").write_text("mcp[cli]>=1.7.1")
+
+    # Create project2/tools (Level 2)
+    project2 = my_projects / "project2"
+    project2.mkdir()
+    tools = project2 / "tools"
+    tools.mkdir()
+    (tools / "mcp-tool.py").write_text(
+        "from mcp.server.fastmcp import FastMCP\n@mcp.tool()\ndef tool(): pass"
+    )
+    (tools / "requirements.txt").write_text("mcp[cli]>=1.7.1")
+
+    # Create a non-server directory
+    non_server = tmp_path / "non-server"
+    non_server.mkdir()
+    (non_server / "script.py").write_text("print('not a server')")
+
+    return {
+        "root": tmp_path,
+        "mcp_servers": mcp_servers,
+        "my_projects": my_projects,
+        "server1": server1,
+        "server2": server2,
+        "project1_mcp_server": mcp_server,
+        "project2_tools": tools,
+        "non_server": non_server,
+    }
+
+
 class TestHolster:
     def test_create_server(self, holster: Holster, test_config_path: Path):
         """Test creating a new server configuration."""
@@ -196,3 +258,48 @@ class TestHolster:
             assert "round_trip_server" not in config["unusedMcpServers"]
             assert len(config["mcpServers"]) == 2
             assert len(config["unusedMcpServers"]) == 1
+
+    def test_scan_mcp_servers(
+        self, holster: Holster, mock_server_directories: Dict[str, Path]
+    ):
+        """Test scanning for MCP servers in directories."""
+        # Test scanning root directory
+        servers = holster.scan_mcp_servers(mock_server_directories["root"])
+
+        # Verify all server directories were found
+        assert len(servers) == 4
+        server_paths = {str(path) for path in servers}
+
+        # Check Level 1 servers
+        assert str(mock_server_directories["server1"]) in server_paths
+        assert str(mock_server_directories["server2"]) in server_paths
+
+        # Check Level 2 servers
+        assert str(mock_server_directories["project1_mcp_server"]) in server_paths
+        assert str(mock_server_directories["project2_tools"]) in server_paths
+
+        # Verify non-server directory was not included
+        assert str(mock_server_directories["non_server"]) not in server_paths
+
+    def test_scan_mcp_servers_empty_directory(self, holster: Holster, tmp_path: Path):
+        """Test scanning an empty directory."""
+        servers = holster.scan_mcp_servers(tmp_path)
+        assert len(servers) == 0
+
+    def test_scan_mcp_servers_invalid_directory(self, holster: Holster):
+        """Test scanning a non-existent directory."""
+        with pytest.raises(ValueError):
+            holster.scan_mcp_servers(Path("/non/existent/path"))
+
+    def test_scan_mcp_servers_with_invalid_servers(
+        self, holster: Holster, tmp_path: Path
+    ):
+        """Test scanning directories with invalid server configurations."""
+        # Create a directory with invalid server files
+        invalid_server = tmp_path / "invalid-server"
+        invalid_server.mkdir()
+        (invalid_server / "server.py").write_text("print('not a real server')")
+        (invalid_server / "requirements.txt").write_text("some-package>=1.0.0")
+
+        servers = holster.scan_mcp_servers(tmp_path)
+        assert len(servers) == 0

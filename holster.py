@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Set
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 import json
@@ -87,6 +87,69 @@ class Holster:
 
         self._write_config(config)
 
+    def scan_mcp_servers(self, directory: Path) -> Set[Path]:
+        """Scan a directory for MCP servers.
+
+        This method scans the given directory and its subdirectories (up to 2 levels deep)
+        for potential MCP servers. A directory is considered a server if it contains:
+        - A Python file with MCP indicators (FastMCP import or @mcp.tool decorator)
+        - A requirements.txt or pyproject.toml file
+
+        Args:
+            directory: Root directory to scan for MCP servers
+
+        Returns:
+            Set of Path objects pointing to valid MCP server directories
+
+        Raises:
+            ValueError: If the directory does not exist
+        """
+        if not directory.exists():
+            raise ValueError(f"Directory does not exist: {directory}")
+
+        server_dirs: Set[Path] = set()
+
+        # Helper function to check if a directory is a valid MCP server
+        def is_mcp_server(dir_path: Path) -> bool:
+            # Check for Python files with MCP indicators
+            for py_file in dir_path.glob("*.py"):
+                content = py_file.read_text()
+                if "FastMCP" in content and "@mcp.tool()" in content:
+                    # Check for requirements or pyproject
+                    if (dir_path / "requirements.txt").exists() or (
+                        dir_path / "pyproject.toml"
+                    ).exists():
+                        return True
+            return False
+
+        # Scan Level 1 (immediate subdirectories)
+        try:
+            for item in directory.iterdir():
+                if item.is_dir():
+                    if is_mcp_server(item):
+                        server_dirs.add(item)
+                    # Scan Level 2 (subdirectories)
+                    try:
+                        for subitem in item.iterdir():
+                            if subitem.is_dir():
+                                if is_mcp_server(subitem):
+                                    server_dirs.add(subitem)
+                                # Scan subdirectories of Level 2
+                                try:
+                                    for subsubitem in subitem.iterdir():
+                                        if subsubitem.is_dir() and is_mcp_server(
+                                            subsubitem
+                                        ):
+                                            server_dirs.add(subsubitem)
+                                except PermissionError:
+                                    pass
+                    except PermissionError:
+                        pass
+        except PermissionError:
+            pass
+
+        return server_dirs
+
 
 # Initialize FastMCP server
 mcp = FastMCP("holster")
@@ -121,16 +184,19 @@ async def explain_holster() -> Dict[str, Any]:
         "overview": """
         Holster is a Python-based tool that manages MCP servers in Claude's configuration
         file directly from Claude desktop. It eliminates the need for manual text editor
-        modifications by providing a programmatic interface for server management.
+        modifications by providing a programmatic interface for server management and discovery.
         """,
         "architecture": """
         Holster consists of two main components:
-        1. A Python class (Holster) that handles config file operations
+        1. A Python class (Holster) that handles config file operations and server discovery
         2. An MCP server interface that exposes these operations as tools
         
         The tool maintains two lists in Claude's config:
         - mcpServers: Currently active servers
         - unusedMcpServers: Servers that are stored but not active
+
+        It also provides functionality to scan directories for MCP servers, identifying
+        them based on their code structure and dependencies.
         """,
         "config_management": """
         Holster manages Claude's configuration file at:
@@ -141,6 +207,7 @@ async def explain_holster() -> Dict[str, Any]:
         - Maintaining server lists
         - Validating server configurations
         - Ensuring data consistency
+        - Discovering and validating MCP servers in directories
         """,
         "tools": """
         Available tools:
@@ -149,7 +216,13 @@ async def explain_holster() -> Dict[str, Any]:
         3. list_servers: View all active and inactive servers
         4. update_server_status: Activate or deactivate servers in Claude Desktop
         5. delete_servers: Remove servers from the configuration
-        6. explain_holster: This tool, explaining how Holster works
+        6. scan_servers: Discover MCP servers in directories (up to 2 levels deep)
+        7. explain_holster: This tool, explaining how Holster works
+
+        The scan_servers tool can identify MCP servers by looking for:
+        - Python files containing FastMCP imports and @mcp.tool decorators
+        - Associated requirements.txt or pyproject.toml files
+        - Proper directory structure up to 2 levels deep
         """,
         "best_practices": """
         Recommended usage patterns:
@@ -157,7 +230,9 @@ async def explain_holster() -> Dict[str, Any]:
         2. Use list_servers to verify current state
         3. Keep server names unique and descriptive
         4. Use update_server_status to activate/deactivate servers instead of deleting/recreating
-        5. Verify changes with list_servers after operations
+        5. Use scan_servers to discover MCP servers in project directories
+        6. Verify scanned servers before adding them to configuration
+        7. Maintain proper requirements files for all MCP servers
         """,
     }
 
@@ -272,6 +347,123 @@ async def delete_servers(server_names: List[str]) -> Dict[str, Any]:
         "remaining_active": len(active_servers),
         "remaining_inactive": len(inactive_servers),
     }
+
+
+@mcp.tool()
+async def scan_servers(directory: str) -> Dict[str, Any]:
+    """Scan a directory for MCP servers and return their locations.
+
+    This tool scans the specified directory and its subdirectories (up to 2 levels deep)
+    for potential MCP servers. It identifies directories containing MCP server code
+    and returns their locations.
+
+    Args:
+        directory: Path to the directory to scan
+
+    Returns:
+        Dict containing:
+            - servers: List of server directory paths
+            - count: Number of servers found
+            - scanned_directory: The directory that was scanned
+
+    Raises:
+        ValueError: If the directory does not exist
+    """
+    dir_path = Path(directory)
+    server_dirs = holster.scan_mcp_servers(dir_path)
+
+    return {
+        "servers": [str(path) for path in server_dirs],
+        "count": len(server_dirs),
+        "scanned_directory": str(dir_path),
+    }
+
+
+@mcp.tool()
+async def discover_mcp_servers() -> Dict[str, Any]:
+    """Discover MCP servers in common project locations.
+
+    This tool scans common project directories where MCP servers might be stored:
+    1. ~/Documents/
+    2. ~/Projects/
+    3. ~/dev/
+    4. ~/workspace/
+    5. Current directory and its parent
+    6. Any immediate subdirectories in home that might contain projects
+
+    Returns:
+        Dict containing:
+            - locations: Dict mapping location name to its scan results
+                Each scan result contains:
+                - servers: List of server directory paths
+                - count: Number of servers found
+                - path: Full path that was scanned
+                - exists: Whether the directory exists
+            - summary: Overall statistics
+                - total_servers_found: Total number of potential servers
+                - locations_checked: Number of locations checked
+                - locations_exist: Number of locations that exist
+    """
+    # Get home directory
+    home = Path.home()
+
+    # Define common project locations to check
+    locations = {
+        "documents": home / "Documents",
+        "projects": home / "Projects",
+        "dev": home / "dev",
+        "workspace": home / "workspace",
+        "current": Path.cwd(),
+        "parent": Path.cwd().parent,
+    }
+
+    # Add any immediate subdirectories in home that might contain projects
+    for item in home.iterdir():
+        if item.is_dir() and not item.name.startswith("."):  # Skip hidden directories
+            locations[f"home-{item.name}"] = item
+
+    # Scan each location
+    results: Dict[str, Any] = {"locations": {}}
+    total_servers = 0
+    locations_exist = 0
+
+    for name, path in locations.items():
+        if path.exists():
+            locations_exist += 1
+            try:
+                server_dirs = holster.scan_mcp_servers(path)
+                server_count = len(server_dirs)
+                total_servers += server_count
+                results["locations"][name] = {
+                    "servers": [str(server_dir) for server_dir in server_dirs],
+                    "count": server_count,
+                    "path": str(path),
+                    "exists": True,
+                }
+            except Exception as e:
+                results["locations"][name] = {
+                    "servers": [],
+                    "count": 0,
+                    "path": str(path),
+                    "exists": True,
+                    "error": str(e),
+                }
+        else:
+            results["locations"][name] = {
+                "servers": [],
+                "count": 0,
+                "path": str(path),
+                "exists": False,
+            }
+
+    # Add summary statistics
+    results["summary"] = {
+        "total_servers_found": total_servers,
+        "locations_checked": len(locations),
+        "locations_exist": locations_exist,
+    }
+
+    return results
 
 
 if __name__ == "__main__":
