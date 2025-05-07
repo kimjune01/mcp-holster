@@ -93,7 +93,7 @@ class Holster:
         This method scans the given directory and its subdirectories (up to 2 levels deep)
         for potential MCP servers. A directory is considered a server if it contains:
         - A Python file with MCP indicators (FastMCP import or @mcp.tool decorator)
-        - A requirements.txt or pyproject.toml file
+        - A requirements.txt or pyproject.toml file (optional if MCP code is found)
 
         Args:
             directory: Root directory to scan for MCP servers
@@ -111,40 +111,81 @@ class Holster:
 
         # Helper function to check if a directory is a valid MCP server
         def is_mcp_server(dir_path: Path) -> bool:
-            # Check for Python files with MCP indicators
-            for py_file in dir_path.glob("*.py"):
-                content = py_file.read_text()
-                if "FastMCP" in content and "@mcp.tool()" in content:
-                    # Check for requirements or pyproject
-                    if (dir_path / "requirements.txt").exists() or (
-                        dir_path / "pyproject.toml"
-                    ).exists():
+            # Check for Python files with MCP indicators (including in src/ and package directories)
+            for py_file in dir_path.glob("**/*.py"):
+                try:
+                    content = py_file.read_text()
+                    if "FastMCP" in content or "@mcp.tool()" in content:
+                        # If we find MCP code in a nested directory, return the root project directory
+                        if "src" in py_file.parts:
+                            return True
+                        if (
+                            len(py_file.parts) > len(dir_path.parts) + 2
+                        ):  # More than 2 levels deep
+                            return True
                         return True
+                except Exception:
+                    continue
+
+            # If no MCP code found, check for dependencies
+            req_file = dir_path / "requirements.txt"
+            pyproject_file = dir_path / "pyproject.toml"
+
+            if req_file.exists():
+                try:
+                    content = req_file.read_text()
+                    if "mcp" in content.lower():
+                        return True
+                except Exception:
+                    pass
+
+            if pyproject_file.exists():
+                try:
+                    content = pyproject_file.read_text()
+                    if "mcp" in content.lower():
+                        return True
+                except Exception:
+                    pass
+
             return False
+
+        # Helper function to get the project root directory
+        def get_project_root(path: Path) -> Path:
+            # If we're in a src directory, go up to the project root
+            if "src" in path.parts:
+                src_index = path.parts.index("src")
+                return Path(*path.parts[:src_index])
+            return path
 
         # Scan Level 1 (immediate subdirectories)
         try:
             for item in directory.iterdir():
-                if item.is_dir():
-                    if is_mcp_server(item):
-                        server_dirs.add(item)
-                    # Scan Level 2 (subdirectories)
-                    try:
-                        for subitem in item.iterdir():
-                            if subitem.is_dir():
-                                if is_mcp_server(subitem):
-                                    server_dirs.add(subitem)
-                                # Scan subdirectories of Level 2
-                                try:
-                                    for subsubitem in subitem.iterdir():
-                                        if subsubitem.is_dir() and is_mcp_server(
-                                            subsubitem
-                                        ):
-                                            server_dirs.add(subsubitem)
-                                except PermissionError:
-                                    pass
-                    except PermissionError:
-                        pass
+                if not item.is_dir():
+                    continue
+
+                if is_mcp_server(item):
+                    server_dirs.add(get_project_root(item))
+                    continue  # Skip deeper scanning if we found a server
+
+                # Scan Level 2 (subdirectories)
+                try:
+                    for subitem in item.iterdir():
+                        if not subitem.is_dir():
+                            continue
+
+                        if is_mcp_server(subitem):
+                            server_dirs.add(get_project_root(subitem))
+                            continue  # Skip deeper scanning if we found a server
+
+                        # Scan subdirectories of Level 2
+                        try:
+                            for subsubitem in subitem.iterdir():
+                                if subsubitem.is_dir() and is_mcp_server(subsubitem):
+                                    server_dirs.add(get_project_root(subsubitem))
+                        except PermissionError:
+                            pass
+                except PermissionError:
+                    pass
         except PermissionError:
             pass
 
