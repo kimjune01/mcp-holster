@@ -1,2 +1,2 @@
 httpx>=0.24.0
-mcp-server>=0.1.0 
+mcp[cli]>=1.7.1
