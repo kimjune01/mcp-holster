@@ -2,6 +2,12 @@
 
 A Python-based tool for managing MCP servers in Claude's configuration file directly from Claude desktop, eliminating the need for manual text editor modifications.
 
+## Motivation
+
+Although Claude is prompted not to use tools when not necessary, it is often too eager to invoke tools at its disposal. But who's gonna add and remove MCP servers manually?
+
+Managing MCP servers through text editors is a task well-suited for LLMs, but Claude currently only provides a pointer to the config file. Holster aims to improve this experience by providing a seamless interface for server management directly within Claude desktop.
+
 ## Features
 
 - 🔄 Seamless server management within Claude desktop
@@ -133,10 +139,6 @@ print(response)  # Should print "Pong!"
 ```bash
 python -m pytest test_holster.py -v
 ```
-
-## Motivation
-
-Managing MCP servers through text editors is a task well-suited for LLMs, but Claude currently only provides a pointer to the config file. Holster aims to improve this experience by providing a seamless interface for server management directly within Claude desktop.
 
 ## Scope
 
